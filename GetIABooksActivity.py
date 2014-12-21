@@ -19,6 +19,7 @@
 import os
 import logging
 import time
+import json
 
 from gi.repository import Gtk
 from gi.repository import Gdk
@@ -72,7 +73,7 @@ class GetIABooksActivity(activity.Activity):
 
     def __init__(self, handle):
         "The entry point to the Activity"
-        activity.Activity.__init__(self, handle, False)
+        activity.Activity.__init__(self, handle)
         self.max_participants = 1
 
         self.selected_book = None
@@ -83,6 +84,7 @@ class GetIABooksActivity(activity.Activity):
         self._lang_code_handler = languagenames.LanguageNames()
         self.catalogs_configuration = {}
         self.catalog_history = []
+        self.books = {}
 
         if os.path.exists('/etc/get-books.cfg'):
             self._read_configuration('/etc/get-books.cfg')
@@ -394,6 +396,10 @@ class GetIABooksActivity(activity.Activity):
     def enable_button(self,  state):
         self._download.props.sensitive = state
         self.format_combo.props.sensitive = state
+        # Hide read book button, and show the download button.
+        self._showbook.hide()
+        if not self.source == 'local_books':
+            self._download.show()
 
     def move_up_catalog(self, treeview):
         len_cat = len(self.catalog_history)
@@ -568,6 +574,12 @@ class GetIABooksActivity(activity.Activity):
         self._download.connect('clicked', self.__get_book_cb)
         vbox_download.pack_start(self._download, False, False, 10)
 
+        # Really its readbook.
+        # But the patch "Start activity from another activity" never land
+        self._showbook = Gtk.Button(_('Show in journal'))
+        self._showbook.connect('clicked', self.__show_book_cb)
+        vbox_download.pack_start(self._showbook, False, False, 10)
+
         bottom_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
 
         if self.show_images:
@@ -578,6 +590,7 @@ class GetIABooksActivity(activity.Activity):
         bottom_hbox.pack_start(self.scrolled, True, True, 10)
         bottom_hbox.pack_start(vbox_download, False, False, 10)
         bottom_hbox.show_all()
+        self._showbook.hide()
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         vbox.pack_start(self.msg_label, False, False, 10)
@@ -642,8 +655,13 @@ class GetIABooksActivity(activity.Activity):
             if selected_book:
                 self.update_format_combo(selected_book.get_download_links())
                 self.selected_book = selected_book
-                self._download.show()
                 self.show_book_data()
+                if self.books in self.download_url:
+                    self._showbook.show()
+                    self._download.hide()
+                else:
+                    self._showbook.hide()
+                    self._download.show()
 
     def show_message(self, text):
         self.msg_label.set_text(text)
@@ -1068,6 +1086,9 @@ class GetIABooksActivity(activity.Activity):
         os.remove(tempfile)
         self.progressbox.hide()
         self._object_id = journal_entry.object_id
+        self.books[self.download_url] = {'id': self._object_id}
+        self._showbook.show()
+        self._download.hide()
         self._show_journal_alert(_('Download completed'), self.selected_title)
 
     def _show_journal_alert(self, title, msg):
@@ -1199,12 +1220,35 @@ class GetIABooksActivity(activity.Activity):
             books.append(opds.Book(repo_configuration, entry, ''))
         return books
 
-    def close(self,  skip_save=False):
-        "Override the close method so we don't try to create a Journal entry."
-        activity.Activity.close(self,  True)
+    def read_file(self, file_path):
+        fd = open(file_path, 'r')
+        data = fd.read()
+        self.books = json.loads(data)
 
-    def save(self):
-        pass
+        for book in self.books:
+            b = self.books[book]
+            try:
+                dataobject = datastore.get(b['id'])
+                del dataobject
+            except:
+                self.books.pop(book)
+
+        fd.close()
+
+    def write_file(self, file_path):
+        fd = open(file_path, 'w')
+        data = json.dumps(self.books)
+        fd.write(data)
+        fd.close()
+
+    def __show_book_cb(self, button):
+        """
+        Really its needs to use the 'Start activity from another activity'
+        feature, but it never landed. So, we are using show in journal code
+        for the moment
+        """
+        object_id = self.books[self.download_url]['id']
+        activity.show_object_in_journal(object_id)
 
 
 class ButtonWithImage(Gtk.Button):
